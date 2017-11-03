@@ -7,12 +7,7 @@
  */
 
 /* ToDo:
- *  change yellow light timing
- *  fix small display (hw)
- *  while loops & breaking
- *  change order so termination ends this loop not next
- *  implement non-hacky debounce
- *  turn red LED on when entering timer mode
+ *  fix small display (hw) (parts ordered)
  */
 
 #include <Wire.h>
@@ -22,23 +17,30 @@
 Adafruit_7segment bigDisplay = Adafruit_7segment();
 Adafruit_7segment smallDisplay = Adafruit_7segment();
 
+// LEDs
 const int redLed = 13;
 const int ylwLed = 12;
 const int grnLed = 11;
+
+// buttons and switches
 const int button1 = 2;
 const int button2 = 3;
 const int modeSw = 4;
+
+//other variables
 int counter = 0;
+volatile int manState = 0;
+int dbM = 300;  //debounce time, ms
 
 void setup() {
   Serial.begin(9600);
   Serial.println("Starting setup");
   bigDisplay.begin(0x70);
-  Serial.println("Big Display complete");
+  //Serial.println("Big Display complete");
   smallDisplay.begin(0x71);
 
   // pin settings
-  Serial.println("Pin Settings");
+  //Serial.println("Pin Settings");
   pinMode(redLed, OUTPUT);
   pinMode(ylwLed, OUTPUT);
   pinMode(grnLed, OUTPUT);
@@ -65,28 +67,25 @@ void loop() {
 void manualMode() {
   // manual mode setup
   Serial.println("Entering Manual Mode");
+  attachInterrupt(digitalPinToInterrupt(button1), manualCounter, FALLING);
+  
   clearDisplays();
   counter = 0;
   
   // manual mode loop
   while (true) { 
-    if (digitalRead(button1) == LOW) {
-        counter++;
-        // lazy debounce, there are others
-        delay(500);
-      }
       switch(counter % 3) {
         case 0:
         // red light
-          redLedOn();
+          ledCtrl(LOW, LOW, HIGH);
         break;
         case 1:
         // green light
-          greenLedOn();
+          ledCtrl(HIGH, LOW, LOW);
         break;
         case 2:
         // yellow light
-          yellowLedOn();
+          ledCtrl(LOW, HIGH, LOW);
         break;
         default:
           //something broke
@@ -106,37 +105,45 @@ void timerMode() {
   int seconds = 0;
   float maxSeconds = 0;
   int go = false;
-  LedsOff();
+  detachInterrupt(digitalPinToInterrupt(button1));
   counter = minutes*100 + seconds;
 
   // zero both displays
   writeBothDisplays(counter, true);
 
-  //timer mode loop
+  // turn red LED on
+  ledCtrl(LOW, LOW, HIGH);
+
+  // timer mode loop
   while (true) {
     // set timer
     if (digitalRead(button2) == LOW) {
       minutes++;
       counter = minutes*100 + seconds;
       writeBothDisplays(counter, true);
-      delay(500);
+      delay(dbM);
     }
     //start timer
     if (digitalRead(button1) == LOW) {
       go = true;
       maxSeconds = minutes*60;
-      delay(500);
+      delay(dbM);
     }
     if (go) {
+      writeBothDisplays(counter, true);
       if (counter > 0) {
         // control the traffic lights
         Serial.println(counter);
-        // 10% of time remaining
-        if ((float)(minutes*60+seconds)/maxSeconds <= 0.1) {
-          yellowLedOn();
+        // timer was > 1 minute and only 1 minute remains
+        if (maxSeconds > 60 && minutes == 0) {
+          ledCtrl(LOW, HIGH, LOW);
+        }
+        // timer was <= 1 minute and 10 seconds remain
+        else if (maxSeconds<=60 && minutes==0 && seconds<=10) {
+          ledCtrl(LOW, HIGH, LOW);
         }
         else {
-          greenLedOn();
+          ledCtrl(HIGH, LOW, LOW);
         }
         // handle minutes/seconds conversion
         if (seconds == 0) {
@@ -150,10 +157,9 @@ void timerMode() {
       else {
         go = false;
         clearDisplays();
-        redLedOn();
+        ledCtrl(LOW, LOW, HIGH);
       }
       counter = minutes*100 + seconds;
-      writeBothDisplays(counter, true);
       delay(1000);
     }
     if (digitalRead(modeSw) == HIGH) {
@@ -164,7 +170,7 @@ void timerMode() {
 
 void clearDisplays() {
   writeBothDisplays(10000, false);
-  LedsOff();
+  ledCtrl(LOW, LOW, HIGH);
 }
 
 void writeBothDisplays(int number, int colon) {
@@ -189,31 +195,22 @@ void writeBothDisplays(int number, int colon) {
   bigDisplay.writeDisplay();
 }
 
-void greenLedOn() {
-  Serial.println("Green light.");
-  digitalWrite(grnLed, HIGH);
-  digitalWrite(ylwLed, LOW);
-  digitalWrite(redLed, LOW);
+void ledCtrl(boolean green, boolean yellow, boolean red) {
+  Serial.print("G:");Serial.print(green);
+  Serial.print(" Y:");Serial.print(yellow);
+  Serial.print(" R:");Serial.println(red);
+  digitalWrite(grnLed, green);
+  digitalWrite(ylwLed, yellow);
+  digitalWrite(redLed, red);
 }
 
-void yellowLedOn() {
-  Serial.println("Yellow light.");
-  digitalWrite(grnLed, LOW);
-  digitalWrite(ylwLed, HIGH);
-  digitalWrite(redLed, LOW);
-}
-
-void redLedOn() {
-  Serial.println("Red light.");
-  digitalWrite(grnLed, LOW);
-  digitalWrite(ylwLed, LOW);
-  digitalWrite(redLed, HIGH);
-}
-
-void LedsOff() {
-  Serial.println("Lights out.");
-  digitalWrite(grnLed, LOW);
-  digitalWrite(ylwLed, LOW);
-  digitalWrite(redLed, LOW);
+void manualCounter() {
+  Serial.println("Button 1 Interrupt");
+  static unsigned long last_interrupt_time = 0;
+  unsigned long interrupt_time = millis();
+  if (interrupt_time - last_interrupt_time > dbM) {
+    counter++;
+  }
+  last_interrupt_time = interrupt_time;
 }
 
